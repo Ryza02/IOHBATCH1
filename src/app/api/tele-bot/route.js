@@ -1,67 +1,71 @@
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Only POST allowed' });
-  }
+// app/api/tele-bot/route.js
+import { NextRequest } from 'next/server';
 
+// Helper: kirim pesan ke Telegram
+async function sendMessage(chatId, text) {
   const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-  const ADMIN_ID = process.env.ADMIN_TELEGRAM_ID;
-  const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
-  const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!TELEGRAM_TOKEN) throw new Error('TELEGRAM_BOT_TOKEN missing');
+  
+  const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+  await fetch(`${TELEGRAM_API}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
+  });
+}
 
-  if (!TELEGRAM_TOKEN || !ADMIN_ID || !REDIS_URL || !REDIS_TOKEN) {
-    console.error('Missing env vars');
-    return res.status(500).json({ error: 'Server misconfigured' });
-  }
+// Helper: Redis command
+async function redisCommand(command) {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error('Redis env vars missing');
 
-  const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify(command),
+  });
+  return await res.json();
+}
 
-  const sendMessage = async (chatId, text) => {
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
-    });
-  };
-
-  const redisCommand = async (command) => {
-    const response = await fetch(REDIS_URL, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${REDIS_TOKEN}` },
-      body: JSON.stringify(command),
-    });
-    return await response.json();
-  };
-
-  const { message } = req.body;
-  if (!message || !message.from?.id) return res.status(200).end();
-
-  const userId = String(message.from.id);
-  const text = message.text?.trim() || '';
-
-  // Baca state user
-  const getStored = await redisCommand(['GET', `user:${userId}`]);
-  let user = getStored.result ? JSON.parse(getStored.result) : { state: 'start' };
-
+export async function POST(request) {
   try {
+    const body = await request.json();
+    const { message } = body;
+    
+    if (!message || !message.from?.id) {
+      return new Response(null, { status: 200 });
+    }
+
+    const userId = String(message.from.id);
+    const text = message.text?.trim() || '';
+
+    // Baca state user dari Redis
+    const getStored = await redisCommand(['GET', `user:${userId}`]);
+    let user = getStored.result ? JSON.parse(getStored.result) : { state: 'start' };
+
+    // Handle /start
     if (text === '/start') {
       user = { state: 'waiting_name', id: userId };
       await redisCommand(['SET', `user:${userId}`, JSON.stringify(user), 'EX', '7200']);
       await sendMessage(userId, '👋 Halo! Untuk mengajukan akses ke IOH Project, silakan kirim *nama lengkap* Anda.');
-      return res.status(200).end();
+      return new Response(null, { status: 200 });
     }
 
+    // Tunggu nama
     if (user.state === 'waiting_name') {
       user.name = text;
       user.state = 'waiting_email';
       await redisCommand(['SET', `user:${userId}`, JSON.stringify(user), 'EX', '7200']);
       await sendMessage(userId, '📧 Terima kasih! Sekarang kirim *alamat email* Anda.');
-      return res.status(200).end();
+      return new Response(null, { status: 200 });
     }
 
+    // Tunggu email
     if (user.state === 'waiting_email') {
       if (!text.includes('@') || !text.includes('.')) {
         await sendMessage(userId, '❌ Format email tidak valid. Contoh: nama@email.com');
-        return res.status(200).end();
+        return new Response(null, { status: 200 });
       }
       user.email = text;
       user.state = 'pending_approval';
@@ -79,13 +83,13 @@ Balas dengan:
 ❌ \`/reject_${userId}\`
       `.trim();
 
-      await sendMessage(ADMIN_ID, notifyAdmin);
+      await sendMessage(process.env.ADMIN_TELEGRAM_ID, notifyAdmin);
       await sendMessage(userId, '📨 Permohonan Anda telah dikirim ke admin. Mohon tunggu konfirmasi.');
-      return res.status(200).end();
+      return new Response(null, { status: 200 });
     }
 
-    // Handle admin commands
-    if (userId === ADMIN_ID) {
+    // Handle admin approval/rejection
+    if (userId === process.env.ADMIN_TELEGRAM_ID) {
       if (text.startsWith('/approve_')) {
         const targetId = text.split('_')[1];
         if (targetId) {
@@ -93,15 +97,14 @@ Balas dengan:
           const targetUser = targetRes.result ? JSON.parse(targetRes.result) : null;
           if (targetUser && targetUser.state === 'pending_approval') {
             targetUser.state = 'approved';
-            await redisCommand(['SET', `user:${targetId}`, JSON.stringify(targetUser), 'EX', '2592000']); // 30 hari
-
-            // 🔗 Ganti dengan link proyekmu nanti
-            const PROJECT_LINK = `https://ioh-project.vercel.app?access=${targetId}`;
+            await redisCommand(['SET', `user:${targetId}`, JSON.stringify(targetUser), 'EX', '2592000']);
+            
+            const PROJECT_LINK = `https://ioh-batch1.vercel.app?access=${targetId}`;
             await sendMessage(targetId, `✅ *Akses Disetujui!*\n\nSilakan buka proyek Anda di sini:\n${PROJECT_LINK}`);
-            await sendMessage(ADMIN_ID, `✅ User ${targetId} telah disetujui.`);
+            await sendMessage(process.env.ADMIN_TELEGRAM_ID, `✅ User ${targetId} telah disetujui.`);
           }
         }
-        return res.status(200).end();
+        return new Response(null, { status: 200 });
       }
 
       if (text.startsWith('/reject_')) {
@@ -113,10 +116,10 @@ Balas dengan:
             targetUser.state = 'rejected';
             await redisCommand(['SET', `user:${targetId}`, JSON.stringify(targetUser), 'EX', '86400']);
             await sendMessage(targetId, '❌ Maaf, permohonan akses Anda tidak disetujui.');
-            await sendMessage(ADMIN_ID, `❌ User ${targetId} ditolak.`);
+            await sendMessage(process.env.ADMIN_TELEGRAM_ID, `❌ User ${targetId} ditolak.`);
           }
         }
-        return res.status(200).end();
+        return new Response(null, { status: 200 });
       }
     }
 
@@ -125,15 +128,32 @@ Balas dengan:
       start: 'Ketik /start untuk memulai pengajuan akses.',
       approved: '✅ Anda sudah disetujui! Gunakan link yang sudah dikirim.',
       rejected: '❌ Akses Anda ditolak.',
-      pending_approval: '⏳ Permohonan sedang diproses. Mohon tunggu.',
+      pending_approval: '⏳ Permohonan sedang diproses.',
     };
     const msg = replies[user.state] || replies.start;
     await sendMessage(userId, msg);
 
+    return new Response(null, { status: 200 });
   } catch (e) {
-    console.error('Error:', e);
-    await sendMessage(userId, '⚠️ Terjadi kesalahan. Silakan coba lagi nanti.');
+    console.error('Bot error:', e);
+    return new Response('Internal Server Error', { status: 500 });
   }
+}
 
-  return res.status(200).end();
+// Opsional: endpoint GET untuk set webhook (bisa dihapus setelah set)
+export async function GET() {
+  const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  const WEBHOOK_URL = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}/api/tele-bot`
+    : 'http://localhost:3000/api/tele-bot';
+
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook?url=${encodeURIComponent(WEBHOOK_URL)}`
+    );
+    const data = await res.json();
+    return new Response(JSON.stringify(data), { status: 200 });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+  }
 }
