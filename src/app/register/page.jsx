@@ -1,5 +1,4 @@
 import AuthLayout from '@/components/AuthModal';
-import GlassCard from '@/components/GlassCard';
 import Label from '@/components/ui/Label';
 import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
