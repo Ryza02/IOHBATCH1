@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+/* Plus marker (garis tipis vertical + horizontal) */
+.plus-marker {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+}
+.plus-marker::before,
+.plus-marker::after {
+  content: "";
+  position: absolute;
+  background: rgba(255,255,255,0.7);
+  filter: drop-shadow(0 0 6px rgba(129,140,248,.8));
+}
+.plus-marker::before {
+  left: 50%; top: 0; transform: translateX(-50%);
+  width: 1px; height: 18px;
+}
+.plus-marker::after {
+  top: 50%; left: 0; transform: translateY(-50%);
+  height: 1px; width: 18px;
+}

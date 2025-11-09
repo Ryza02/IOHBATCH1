@@ -1,0 +1,22 @@
+@'
+# Node/Next.js
+node_modules/
+.next/
+out/
+.turbo/
+.vercel/
+coverage/
+.eslintcache
+*.log
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+'@ | Set-Content -NoNewline .gitignore
