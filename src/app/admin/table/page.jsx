@@ -1,4 +1,3 @@
-// app/admin/table/page.jsx
 "use client";
 
 import { useState } from "react";
